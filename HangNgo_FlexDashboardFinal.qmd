@@ -1,0 +1,1263 @@
+---
+title: "Diamond Price and Cut Prediction Dashboard"
+format: 
+    dashboard:
+      logo: DULogo.png
+      scrolling: true
+      theme: united
+embed-resources: true
+---
+
+```{r setup, include=FALSE,warning=FALSE}
+#include=FALSE will not include r code in output
+#warning=FALSE will remove any warnings from output
+library(DT) #v0.33 datatable()
+library(performance)
+library(GGally) #v2.2.1
+library(ggcorrplot) #v0.1.4.1
+library(flexdashboard) #v0.6.2
+library(plotly) #v4.10.4
+library(crosstalk) #v1.2.0
+library(knitr) #v1.45 kable(digits=)
+library(crosstalk) #v1.2.1 SharedData()
+library(tidymodels) #v1.2.0
+library(parsnip) #v1.2.1 linear_reg(), set_engine(), set_mode(), fit(), predict()
+library(yardstick) #v1.3.1 metrics(), rac_auc(), roc_curve(), metric_set(), conf_matrix()
+library(dplyr) #v1.1.4 %>%, select(), select_if(), filter(), mutate(), group_by(), 
+    #summarize(), tibble()
+library(ggplot2) #v3.5.1 ggplot()
+library(broom) #v1.0.6 for tidy(), augment(), glance()
+library(rsample) #v1.2.1 initial_split()
+library(rpart)
+library(rpart.plot)
+library(vip)
+```
+
+```{r load_data, include=FALSE,warning=FALSE}
+#Load the data
+df_diamond <- read.csv('diamonds.csv')
+#For this analysis, we will ignore the `ID` variable.
+#Recategorize cut, color, and clarity
+#Make sure that `cut`, color, and clarity are factor variables
+df_diamond <- df_diamond %>%
+  dplyr::select(-ID) %>%
+  mutate(
+    cut = factor(ifelse(cut %in% c("Ideal", "Premium"), "High", "Acceptable"),
+                 levels = c("High", "Acceptable")),
+    color = factor(ifelse(color %in% c("D", "E"), "Tier 1",
+                          ifelse(color %in% c("F", "G"), "Tier 2", "Tier 3")),
+                   levels = c("Tier 1", "Tier 2", "Tier 3")),
+    clarity = factor(ifelse(clarity %in% c("IF", "VVS1", "VVS2"), "Tier 1",
+                            ifelse(clarity %in% c("VS1", "VS2"), "Tier 2", "Tier 3")),
+                    levels = c("Tier 1", "Tier 2", "Tier 3"))
+  )
+
+# Reformat table and depth so that the values are in decimal, not whole number format
+df_diamond <- df_diamond %>% 
+  mutate(table_perc = table/100,
+         depth_perc = depth/100)
+
+# Remove table and depth
+df_diamond <- df_diamond %>% 
+  dplyr::select(-table, -depth)
+
+# Rename columns x, y, z to length, width, and depth
+df_diamond <- df_diamond %>%
+  dplyr::rename(length = x,
+                width = y,
+                depth = z)
+```
+
+```{r}
+set.seed(1234)
+df_diamond <- df_diamond %>% sample_frac(0.25)
+```
+
+```{r, include=FALSE,warning=FALSE}
+head(df_diamond) %>% 
+  kable()
+```
+
+
+# Introduction
+## Row
+### Column {width=60%}
+::: {.card title="About The Project"}
+**Executive Summary**
+
+This study investigates the factors influencing the **price** and **cut** quality of diamonds. By analyzing a 
+comprehensive dataset, we aim to determine how attributes such as carat, color, clarity, depth, and 
+table affect diamond prices. Additionally, we examine which features significantly impact the quality of 
+a diamond's cut. These insights can guide consumers and industry professionals in making informed 
+decisions about diamond valuation and quality assessment. 
+
+**The Problem Description**
+
+This project examines the **Price** and **Cut** of diamonds. We will perform both regression and classification analysis. We will divide the data into training (80%) and testing (20%) datasets. The goal for the **regression models is to predict the price of a diamond** using the predictor variables in the dataset. For this analysis, we will look for relationship between **Price** and other variables. We will use various methods including **Linear Regression, Bagged Tree and Random Forest**. Then, we will perform **classification analysis predicting if the diamond is of high or acceptable cut** using the predictor variables. We will use **Logistic Regression, Random Forest, and Gradient Boosted Model**. Finally, we end with summarizing our conclusions.  We will examine the variables in the dataset to determine what helps to predict the price and cut of a diamond.
+
+**The Data**
+
+This dataset has 53,940 rows and 10 variables. However, with the size of this dataset, I have decided to sample 25% of total observations for better performance and speed.
+
+**Data Sources**
+
+Kaggle: Diamonds (link: https://www.kaggle.com/datasets/shivam2503/diamonds?resource=download)
+:::
+
+### Column {width=40%}
+::: {.card title="Variables"}
+**TO PREDICT WITH**
+
+* **carat**: Carat weight of the diamond
+* **color**: Color quality of the diamond
+* **clarity**: The diamond's level of obvious inclusions
+* **length**: Length of the diamond
+* **width**: Width of the diamond
+* **depth**: Height of the diamond
+* **table_perc**: Width of diamond table, expressed as the proportion of its average diameter
+* **depth_perc**: Height of the diamond, expressed as the proportion from the cutlet divided by its average girdle diameter
+
+**WE WANT TO PREDICT**
+
+* **price**: Price of the diamond
+* **cut**: Cut quality of the diamond
+
+:::
+
+
+# Data Exploration
+## Row
+### Column {width=15%}
+ 
+::: {.card title="Data Overview"}
+From this data we can see that our variables have a variety of different values based on their types. `carat` has a mean of 0.79 but max of 4.1. We see several variables having a wide range of values, most noticeably `price` with a range from 336 to 18823, or `width` with a range of 0 to 9.94 There may be high correlation between the variables as well, for example depth and depth_perc, so we probably will remove one in the analysis.
+For our target variable `cut`, the value is `High` if the cut if Premium or Ideal, and Acceptable if the value is Fair, Good, or Very Good. 
+:::
+
+### Column {width=60%}
+
+::: {.card title="View the Data Summaries" fill="false"}
+Now we can see the range of values for each variable.
+
+```{r}
+#View data
+summary(df_diamond)
+```
+:::
+
+### Column {width=25%}
+
+```{r}
+#| title: Average Price by Cut
+#| fill: false
+df_diamond %>%
+  group_by(cut) %>%
+  summarize(n=n(), mean(price)) %>%
+  kable(digits=2)
+```
+
+```{r}
+#| title: Average Price by Color
+#| fill: false
+df_diamond %>%
+  group_by(color) %>%
+  summarize(n=n(), mean(price)) %>%
+  kable(digits=2)
+```
+
+```{r}
+#| title: Average Price by Clarity
+#| fill: false
+df_diamond %>%
+  group_by(clarity) %>%
+  summarize(n=n(), mean(price)) %>%
+  kable(digits=2)
+```
+
+
+# Data Visualization 
+## Row
+### Column {width=40%}
+
+::: {.card title="Response Variables relationships with predictors"}
+
+* We can see that about 69% of the data are categorized as 'High' in **cut quality**. Looking at the potential relationship, we can see the strongest relationships are with carat and length.
+
+* We see the largest concentration of diamonds' **price** around $0-$5,000. The data is also skewed to the right. Looking at potential relationships, we can see strong relationships between price and carat, length, width, and depth, suggesting these variables have impacts on the price of a diamond.
+
+* The higher than average relationship between certain variables (example: width and leghth) may be sign of multicollinearity and we will probably address this later in the analysis.
+
+:::
+
+### Column {width = 60%}
+
+```{r, fig.height =2.5}
+#| title: Distribution of diamond cut
+ggplotly(ggplot(df_diamond,aes(x=cut)) + geom_bar())
+```
+
+```{r, fig.height = 2.5}
+#| title: Histogram of Diamond Price
+ggplotly(ggplot(df_diamond, aes(x=price, color = cut)) + geom_histogram(bins=20))
+```
+
+## Row {.tabset}
+
+### Diamond Price vs Categorial Variables
+```{r, fig.height = 7}
+ggpairs(dplyr::select(df_diamond,price,cut, color, clarity))
+```
+
+### Price vs Continuous Variables
+```{r, fig.height = 5}
+ggcorrplot(cor(dplyr::select(df_diamond,price,carat, depth_perc, table_perc, length, width, depth)))
+```
+
+### Diamond Cut vs Categorical Variables
+```{r, fig.height = 5}
+ggpairs(dplyr::select(df_diamond,cut, color, clarity))
+```
+
+### Diamond Cut vs Continuous Variables
+```{r, fig.height = 7}
+ggpairs(dplyr::select(df_diamond,cut,carat, depth_perc, table_perc, length, width, depth))
+```
+
+### Diamond Cut vs Diamond Clarity
+```{r, fig.height = 5}
+p <- df_diamond %>% group_by(cut, clarity) %>%
+  summarize(n=n()) %>%
+  ggplot(aes(y=n, x=cut,fill=clarity)) +
+      geom_bar(position="dodge", stat="identity") +
+      geom_text(aes(label=n), position=position_dodge(width=0.9), vjust=-0.25) +
+      ggtitle("Diamond Cut vs Diamon Clarity") +
+      coord_flip() #makes horizontal
+ggplotly(p)
+```
+
+
+# Initial Models 
+## Row {height=30%}
+
+```{r}
+# Split df_diamond to training and testing datasets
+# Set seed for reproducibility
+set.seed(123)
+
+# Split, make sure to stratify on cut
+df_diamond_split <- initial_split(df_diamond, prop = .80, strata = cut)
+df_diamond_train <- rsample::training(df_diamond_split)
+df_diamond_test <- rsample::testing(df_diamond_split)
+```
+
+### Column {width=20%}
+::: {.card title="Training and Testing Datasets"}
+Here is a look at the training and testing dataset
+```{r}
+training <- tibble(Dataset = 'Training',
+                   Number_of_Obs = nrow(df_diamond_train))
+testing <- tibble(Dataset = 'Testing',
+                  Number_of_Obs = nrow(df_diamond_test))
+split_tibble <- bind_rows(training, testing)
+split_tibble %>% 
+  kable()
+```
+
+:::
+
+## Row
+### Column {width=40%}
+::: {.card title="Regression: Predicting Diamond Price"}
+Here is a look at a regression model predicting `price`
+```{r}
+reg_spec <- linear_reg() %>% ## Class of problem  
+   set_engine("lm") %>% ## The particular function that we use  
+   set_mode("regression") ## type of model
+
+#Fit the model
+reg_fit <- reg_spec %>%  
+   fit(price ~ .,data = df_diamond_train)
+
+#Capture the predictions and metrics
+pred_reg_fit <- augment(reg_fit, df_diamond_test)
+tidy(reg_fit$fit) %>%
+  kable(digits=3)
+```
+
+```{r, include=FALSE}
+reg_metrics <- pred_reg_fit %>% 
+  metrics(truth = price, estimate = .pred)
+```
+
+```{r}
+reg_results <- tibble(Model = 'Linear Regression',
+                      RMSE = reg_metrics[[1,3]],
+                      RSquare = reg_metrics[[2,3]],
+                      MAE = reg_metrics[[3,3]])
+
+reg_results %>% 
+  kable(digits = 3, align = 'l')
+#pred_reg_fit %>%
+#   metrics(truth=price,estimate=.pred) %>%
+#   #select(-.estimator) %>%
+#   kable(digits=3, align = 'l')
+```
+:::
+
+### Column {width=40%}
+::: {.card title="Logistic Regression: Predicting Cut"}
+
+Here is a look at a logistic regression model predicting diamond `cut`
+```{r}
+#Define the model specification
+log_spec <- logistic_reg() %>%
+             set_engine('glm') %>%
+             set_mode('classification') 
+
+#Fit the model
+log_fit <- log_spec %>%
+              fit(cut ~ ., data = df_diamond_train)
+
+#Capture the predictions and metrics
+my_class_metrics <- metric_set(yardstick::accuracy, yardstick::sensitivity, yardstick::specificity, yardstick::precision)
+
+pred_log_fit <- augment(log_fit, df_diamond_test)
+tidy(log_fit$fit) %>%
+  kable(digits=3)
+```
+
+```{r, include = FALSE}
+log_metrics <- pred_log_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_class)
+
+log_auc <- pred_log_fit %>% 
+  roc_auc(truth = cut, .pred_High) %>% 
+  pull(.estimate)
+```
+
+```{r}
+log_results <- tibble(Model = 'Logistic Regression',
+                      Accuracy = log_metrics[[1,3]],
+                      Sensitivity = log_metrics[[2,3]],
+                      Specificity = log_metrics[[3,3]],
+                      Precision = log_metrics[[4,3]],
+                      AUC = round(log_auc, 3))
+log_results %>% 
+  kable(digits = 3, align = 'l')
+#pred_log_fit %>%
+#    my_class_metrics(truth=cut,estimate=.pred_class) %>%
+#    #select(-.estimator) %>%
+#    kable(digits = 3, align = 'l')
+```
+:::
+
+## Row {.tabset}
+
+### Regression - VIF Plot
+
+```{r, fig.width=10}
+reg_fit %>%
+  check_model(check='vif')
+```
+
+### Regression - Actual vs Predicted Plot
+
+```{r}
+pred_reg_fit %>%
+  ggplot(aes(y = .pred, x = price)) + 
+    geom_point(col = "#6e0000") +
+    geom_abline(col = "gold") + 
+    ggtitle("Predicted vs Actual Price for Initial Model",
+            subtitle=paste("Adj R-Squared:",
+                          round(glance(reg_fit)$adj.r.squared,3),
+                          "  Mean Abs Residuals:",
+                          round(mean(abs(pred_reg_fit$.resid)),2)))
+```
+
+### Regression - Residual Plot
+
+* We can see that up until the price of $17,500, the residuals look like a "blob" and doesn't necessary form any pattern. However, beyond the price of $17,500, we see a curve that try to accommodate the outliers. I wouldn't recommend using this model for price value over $17,500.
+
+```{r}
+pred_reg_fit %>% 
+  ggplot(aes(x = .pred, y = .resid)) +
+  geom_point(col = '#6E0000') +
+  geom_hline(yintercept = 0, linetype = 'dashed', color = 'grey') +
+  geom_smooth() +
+  scale_x_continuous('Fitted Values') +
+  scale_y_continuous('Residuals') +
+  ggtitle('Residual Plot for Full Model Diamonds Dataset')
+```
+### Logistics - ROC Curve
+
+```{r, fig.width=7, fig.height=4}
+set.seed(999)
+ROC_graph <- function(pred_data, truth, probs, model_desc="", df_roc = ""){
+    #This function creates a ROC Curve. It will return a df_roc with values
+    #it used to create the graph. It will also add to a previous ROC curve
+    #The inputs are the prediction table (from augment()) and the columns for the
+    #truth and probability values. There is also an optional model description
+    #and a previous df_roc dataframe. The columns need to be strings (i.e., 'sales')
+    #Capture the auc value
+    curr_auc <- pred_data %>%
+                     roc_auc(truth = {{truth}}, {{probs}}) %>%
+                     pull(.estimate)
+    #Capture the thresholds and sens/spec
+    ###First choice creates a new df_roc table
+    if (mode(df_roc) == "character") { #if it is a tibble will be "list"
+        df_roc <- pred_data %>% roc_curve(truth = {{truth}}, {{probs}}) %>% 
+                          mutate(model = paste(model_desc,round(curr_auc,2)))
+    }
+    ###Second choice is if there is already a df_roc that was input
+    else {
+    df_roc <- bind_rows(df_roc,  #use if df_roc exists with other models
+                   pred_data %>% roc_curve(truth = {{truth}}, {{probs}}) %>% 
+                      mutate(model = paste(model_desc,round(curr_auc,2))))
+    }
+    #Plot the ROC Curve(s) 
+    print(ggplot(df_roc, 
+            aes(x = 1 - specificity, y = sensitivity, 
+                group = model, col = model)) +
+            geom_path() +
+            geom_abline(lty = 3)  +
+            scale_color_brewer(palette = "Dark2") +
+            theme(legend.position = "top") )
+    #Capture the roc values in a df to add additional ROC curves
+    return(df_roc)
+}
+
+df_roc <- ROC_graph(pred_log_fit, 'cut', '.pred_High', 'Full Logistics Regression')
+```
+### Logistics - ROC Cutoff
+
+```{r}
+ROC_threshold <- function(pred_data,truth,probs) {
+  #This function finds the cutoff with the max sum of sensitivity and specificity
+  #Created tidy version of:
+  #http://scipp.ucsc.edu/~pablo/pulsarness/Step_02_ROC_and_Table_function.html
+  #The inputs are the prediction table (from augment()) and the columns for the
+  #truth and probability values. The columns need to be strings (i.e., 'sales')
+ 
+  roc_curve_tbl <- pred_data %>% 
+                    roc_curve(truth = {{truth}}, {{probs}}) 
+  auc = pred_data %>%
+              roc_auc(truth = {{truth}}, {{probs}}) %>%
+              pull(.estimate)
+  best_row = which.max(roc_curve_tbl$specificity + roc_curve_tbl$sensitivity)
+  return(tibble(Best_Cutoff = round(pull(roc_curve_tbl[best_row,'.threshold']),4),
+         Sensitivity = round(pull(roc_curve_tbl[best_row,'sensitivity']),4),
+         Specificity =round(pull(roc_curve_tbl[best_row,'specificity']),4),
+         AUC = round(auc,4)))
+}
+
+log_bestcut <- ROC_threshold(pred_log_fit, 'cut', '.pred_High')
+
+log_bestcut %>% kable(digits=3)
+```
+
+# Prune and Transform Initial Models
+## Row {.tabset}
+### Regression Model
+#### Column
+::: {.card title="Pruning the model"}
+* We can see that `depth` is not statistically significant at p-value > 0.05, so we will prune it from the model.
+
+```{r}
+#Fit the model
+reg_2_fit <- reg_spec %>%  
+   fit(price ~ . -depth,data = df_diamond_train)
+
+#Capture the predictions and metrics
+pred_reg_2_fit <- augment(reg_2_fit, df_diamond_test)
+tidy(reg_2_fit$fit) %>%
+  kable(digits=3)
+```
+
+```{r}
+# Find the metrics
+reg_2_metrics <- pred_reg_2_fit %>% 
+  metrics(truth = price, estimate = .pred)
+
+# Create a tibble for this regression
+reg_2_results <- tibble(Model = 'Linear Reg., Prune Depth',
+                      RMSE = reg_2_metrics[[1,3]],
+                      RSquare = reg_2_metrics[[2,3]],
+                      MAE = reg_2_metrics[[3,3]])
+
+reg_results <- bind_rows(reg_results, reg_2_results)
+
+reg_results %>% 
+  kable(digits = 3)
+```
+
+:::
+
+#### Column
+::: {.card title="Transform Our Dependent Variable"}
+* Now that all of our predictor variables are statistically significant, we should try transforming the target variables. We will use `log(price)` because the `price` column is skewed to the right.
+
+```{r}
+#Fit the model
+reg_3_fit <- reg_spec %>%  
+   fit(log(price) ~ . -depth,data = df_diamond_train)
+
+#Capture the predictions and metrics
+pred_reg_3_fit <- augment(reg_3_fit, df_diamond_test)
+tidy(reg_3_fit$fit) %>%
+  kable(digits=3)
+```
+
+```{r}
+# Find the metrics
+reg_3_metrics <- pred_reg_3_fit %>% 
+  metrics(truth = price, estimate = .pred)
+
+# Create a tibble for this regression
+reg_3_results <- tibble(Model = 'Linear Reg., Log Price',
+                      RMSE = reg_3_metrics[[1,3]],
+                      RSquare = reg_3_metrics[[2,3]],
+                      MAE = reg_3_metrics[[3,3]])
+
+reg_results <- bind_rows(reg_results, reg_3_results)
+
+reg_results %>% 
+  kable(digits = 3)
+```
+
+:::
+
+### Logistic Model
+#### Column
+::: {.card title="Pruning the model - Clarity"}
+* We can see that `clarityTier2` is not statistically significant at p-value = 0.172, so we will prune it from the model.
+
+```{r}
+df_diamond_2 <- df_diamond %>% 
+  mutate(clarity = factor(ifelse(clarity %in% c("Tier 1", "Tier 2"), "Tier 1&2",
+                                 "Tier 3"),
+                    levels = c("Tier 1&2", "Tier 3")))
+
+# Split df_diamond_2 to training and testing datasets
+# Set seed for reproducibility
+set.seed(123)
+
+# Split, make sure to stratify on cut
+df_diamond_split_2 <- initial_split(df_diamond_2, prop = .80, strata = cut)
+df_diamond_train_2 <- rsample::training(df_diamond_split_2)
+df_diamond_test_2 <- rsample::testing(df_diamond_split_2)
+
+#Fit the model
+log_2_fit <- log_spec %>%
+              fit(cut ~ . , data = df_diamond_train_2)
+
+pred_log_2_fit <- augment(log_2_fit, df_diamond_test_2)
+tidy(log_2_fit$fit) %>%
+  kable(digits=3)
+
+```
+
+```{r}
+# Get the metrics
+log_2_metrics <- pred_log_2_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_class)
+
+# Get the AUC
+log_2_auc <- pred_log_2_fit %>% 
+  roc_auc(truth = cut, .pred_High) %>% 
+  pull(.estimate)
+
+# Get the result tibble
+log_2_results <- tibble(Model = 'Logistic Reg. - Prune Clarity',
+                      Accuracy = log_2_metrics[[1,3]],
+                      Sensitivity = log_2_metrics[[2,3]],
+                      Specificity = log_2_metrics[[3,3]],
+                      Precision = log_2_metrics[[4,3]],
+                      AUC = round(log_2_auc, 3))
+
+# Merge with results table
+log_results <- bind_rows(log_results, log_2_results)
+
+log_results%>% 
+  kable(digits = 3)
+```
+
+:::
+
+#### Column
+::: {.card title="Pruning the model - Carat"}
+
+* Now, let's prune `carat` because it's not statistically significant.
+
+```{r}
+#Fit the model
+log_3_fit <- log_spec %>%
+              fit(cut ~ . -carat, data = df_diamond_train_2)
+
+pred_log_3_fit <- augment(log_3_fit, df_diamond_test_2)
+tidy(log_3_fit$fit) %>%
+  kable(digits=3)
+```
+
+```{r}
+# Get the metrics
+log_3_metrics <- pred_log_3_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_class)
+
+# Get the AUC
+log_3_auc <- pred_log_3_fit %>% 
+  roc_auc(truth = cut, .pred_High) %>% 
+  pull(.estimate)
+
+# Get the result tibble
+log_3_results <- tibble(Model = 'Logistic Reg. - Prune Carat',
+                      Accuracy = log_3_metrics[[1,3]],
+                      Sensitivity = log_3_metrics[[2,3]],
+                      Specificity = log_3_metrics[[3,3]],
+                      Precision = log_3_metrics[[4,3]],
+                      AUC = round(log_3_auc, 3))
+
+# Merge with results table
+log_results <- bind_rows(log_results, log_3_results)
+
+log_results%>% 
+  kable(digits = 3)
+```
+:::
+
+#### Column
+::: {.card title="Pruning the model - Width"}
+
+* Now, let's prune `width` because it's not statistically significant.
+
+```{r}
+#Fit the model
+log_4_fit <- log_spec %>%
+              fit(cut ~ . -carat - width, data = df_diamond_train_2)
+
+pred_log_4_fit <- augment(log_4_fit, df_diamond_test_2)
+tidy(log_4_fit$fit) %>%
+  kable(digits=3)
+```
+
+```{r}
+# Get the metrics
+log_4_metrics <- pred_log_4_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_class)
+
+# Get the AUC
+log_4_auc <- pred_log_4_fit %>% 
+  roc_auc(truth = cut, .pred_High) %>% 
+  pull(.estimate)
+
+# Get the result tibble
+log_4_results <- tibble(Model = 'Logistic Reg. - Prune Width',
+                      Accuracy = log_4_metrics[[1,3]],
+                      Sensitivity = log_4_metrics[[2,3]],
+                      Specificity = log_4_metrics[[3,3]],
+                      Precision = log_4_metrics[[4,3]],
+                      AUC = round(log_4_auc, 3))
+
+# Merge with results table
+log_results <- bind_rows(log_results, log_4_results)
+
+log_results%>% 
+  kable(digits = 3)
+```
+
+:::
+
+# Price Prediction: Tuned Bagged Model
+## Row
+### Column
+::: {.card title="Model Description"}
+
+* For this part of the analysis, I perform a Tuned Bootstrap Aggregrating (Bagged) model to predict the price.
+* For the CV folds, I want 5-fold cross validation, so that the training data is split into 5 equally sized folds. I set the number of trees to 500 in the random forest, and the model will test the minimum sample split into 5, 15, or 25. Similarly, the model will also test the maximum depth of the trees, with the values of 5, 6, 7, 8.
+* I then let R choose the parameter for maximum performance, using the default metrics RSME.
+
+:::
+
+### Column
+::: {.card title="Setting up the model"}
+```{r}
+# Define the CV folds and grid parameters
+set.seed(98789)
+reg_bag_folds <- vfold_cv(df_diamond_train, v=5)
+reg_bag_grid <- expand_grid(min_n = c(5, 15, 25),
+                         max.depth = c(5,6,7,8))
+
+# Define the model specification
+reg_bag_spec <- rand_forest(mtry = .preds(), 
+                         trees = 500,
+                         min_n = tune()) %>%
+                set_engine("ranger", 
+                           importance = "impurity",
+                           max.depth = tune()) %>% 
+                set_mode("regression")
+
+# Define workflow
+reg_bag_wf <- workflow() %>% 
+  add_model(reg_bag_spec) %>% 
+  add_formula(price ~ ., )
+
+# Tune on grid for the model
+reg_bag_rs <- reg_bag_wf %>% 
+  tune_grid(resample = reg_bag_folds,
+            grid = reg_bag_grid)
+
+# Finalize workflow
+final_reg_bag_wf <- reg_bag_wf %>% 
+  finalize_workflow(select_best(reg_bag_rs))
+
+# See the final workflow
+final_reg_bag_wf
+```
+
+```{r}
+set.seed(1234)
+
+# Fit the workflow
+reg_bag_fit <- final_reg_bag_wf %>% 
+  fit(data = df_diamond_train)
+
+# Augment the model
+pred_reg_bag_fit <- reg_bag_fit %>% 
+  augment(df_diamond_test)
+```
+
+:::
+
+### Column
+::: {.card title="Variable Importance Plot"}
+```{r}
+vip(reg_bag_fit, 
+    aesthetics = list(fill = "#6e0000", col = "black"))
+```
+:::
+
+## Row {.tabset}
+### Results 
+```{r}
+# Get the metrics
+reg_bag_metrics <- pred_reg_bag_fit %>% 
+  metrics(truth = price, estimate = .pred)
+
+# Get the results table
+reg_bag_results <- tibble(Model = 'Tuned Bagged Model',
+                          RMSE = reg_bag_metrics[[1,3]],
+                          RSquare = reg_bag_metrics[[2,3]],
+                          MAE = reg_bag_metrics[[3,3]])
+
+# See all the results together
+reg_results <- bind_rows(reg_results, reg_bag_results)
+
+# View the results table
+reg_results %>% kable(digits = 3)
+```
+
+
+### Actual vs Predicted Plot
+```{r}
+pred_reg_bag_fit %>%
+  ggplot(aes(y = .pred, x = price)) + 
+    geom_point(col = "#6e0000") +
+    geom_abline(col = "gold") + 
+    ggtitle("Predicted vs Actual Price for Tuned Bagged Model",
+            subtitle=paste("Adj R-Squared:",
+                          round(reg_results[[4,3]],3)))
+```
+
+
+# Price Prediction: Tuned Random Forest
+## Row
+### Column
+::: {.card title="Model Description"}
+
+* For this part of the analysis, I perform a Tuned Random Forest model to predict the price.
+* For the CV folds, I want 5-fold cross validation, so that the training data is split into 5 equally sized folds. I set the number of trees to 500 in the random forest, and the model will test the minimum sample split into 5, 15, or 25. Similarly, the model will also test the maximum depth of the trees, with the values of 5, 6, 7, 8. The number of variables in the model ranges from 4 to 7.
+* I let R choose the parameter for maximum performance, using the default metrics RSME.
+
+:::
+
+### Column
+::: {.card title="Setting up the model"}
+
+```{r}
+# Define the CV folds and grid parameters
+set.seed(45654)
+reg_rf_folds <- vfold_cv(df_diamond_train, v=5)
+reg_rf_grid <- expand.grid(mtry = 4:7,
+                           min_n = c(5, 15, 25),
+                           max.depth = c(5,6,7,8))
+
+# Define the model specification
+reg_rf_spec <- rand_forest(mtry = tune(), 
+                         trees = 500,
+                         min_n = tune()) %>%
+                set_engine("ranger", 
+                           importance = "impurity",
+                           max.depth = tune()) %>% 
+                set_mode("regression")
+
+# Define the workflow
+reg_rf_wf <- workflow() %>% 
+  add_model(reg_rf_spec) %>% 
+  add_formula(price ~ ., )
+
+# Resample
+reg_rf_rs <- reg_rf_wf %>% 
+  tune_grid(resample = reg_rf_folds,
+            grid = reg_rf_grid)
+
+# Finalize workflow
+final_reg_rf_wf <- reg_rf_wf %>% 
+  finalize_workflow(select_best(reg_rf_rs))
+
+final_reg_rf_wf
+```
+
+
+```{r}
+set.seed(23456)
+
+# Fit the model
+reg_rf_fit <- final_reg_rf_wf %>% 
+  fit(data = df_diamond_train)
+
+# Augment the model
+pred_reg_rf_fit <- reg_rf_fit %>% 
+  augment(df_diamond_test)
+```
+
+:::
+
+### Column
+::: {.card title="Variable Importance Plot"}
+
+```{r}
+vip(reg_rf_fit, 
+    aesthetics = list(fill = "#6e0000", col = "black"))
+```
+
+:::
+
+## Row {.tabset}
+### Results 
+
+```{r}
+# Get the metrics
+reg_rf_metrics <- pred_reg_rf_fit %>% 
+  metrics(truth = price, estimate = .pred)
+
+# Get the results table
+reg_rf_results <- tibble(Model = 'Tuned Random Forest Model',
+                          RMSE = reg_rf_metrics[[1,3]],
+                          RSquare = reg_rf_metrics[[2,3]],
+                          MAE = reg_rf_metrics[[3,3]])
+
+# See all the results together
+reg_results <- bind_rows(reg_results, reg_rf_results)
+
+# View the results table
+reg_results %>% kable(digits = 3)
+```
+
+
+### Actual vs Predicted Plot
+
+```{r}
+pred_reg_rf_fit %>%
+  ggplot(aes(y = .pred, x = price)) + 
+    geom_point(col = "#6e0000") +
+    geom_abline(col = "gold") + 
+    ggtitle("Predicted vs Actual Price for Tuned Random Forest",
+            subtitle=paste("Adj R-Squared:",
+                          round(reg_results[[5,3]],3)))
+```
+
+
+# Cut Prediction: Random Forest
+## Row
+### Column
+::: {.card title="Model Description"}
+
+* For this part of the analysis, I perform a Random Forest model to predict the cut of a diamond
+* Due to performance issue, I couldn't afford to tune the model. I will assign the number of variables randomly selected for the model (`mtry`) as 5, number of trees (`trees`) as 500, minimum number of observations (`min_n`) as 15, and maximum tree depth (`max.depth`) as 7.
+
+:::
+
+### Column
+::: {.card title="Setting up the model"}
+
+```{r}
+set.seed(36482)
+
+# Define model specification
+class_rf_spec <-  rand_forest(mtry = 5, 
+                         trees = 500,
+                         min_n = 15) %>%
+                set_engine("ranger", 
+                           importance = "impurity",
+                           max.depth = 7) %>% 
+                set_mode("classification")
+```
+
+```{r}
+set.seed(23832)
+# Fit the model
+class_rf_fit <- class_rf_spec %>% 
+  fit(cut ~ ., data = df_diamond_train)
+
+# Augment
+pred_class_rf_fit <- class_rf_fit %>% 
+  augment(df_diamond_test)
+```
+
+```{r}
+class_rf_fit$fit
+```
+
+:::
+
+### Column
+::: {.card title="Variable Importance Plot"}
+
+```{r}
+vip(class_rf_fit, 
+    aesthetics = list(fill = "#6e0000", col = "black"))
+```
+
+:::
+
+
+## Row {.tabset}
+
+### Results
+
+```{r}
+# Get the metrics
+class_rf_metrics <- pred_class_rf_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_class)
+
+class_rf_auc <- pred_class_rf_fit %>% 
+  roc_auc(truth = cut, .pred_High) %>% 
+  pull(.estimate)
+
+# Get the metrics into a table
+class_rf_result <- tibble(Model = 'Classification Random Forest',
+                    Accuracy = class_rf_metrics[[1,3]],
+                    Sensitivity = class_rf_metrics[[2,3]],
+                    Specificity = class_rf_metrics[[3,3]],
+                    Precision = class_rf_metrics[[4,3]],
+                    AUC = round(class_rf_auc, 3))
+
+# Merge all classification results together
+log_results <- bind_rows(log_results, class_rf_result)
+
+# See the results
+log_results %>% kable(digits=3)
+```
+
+
+### ROC Curve
+
+```{r}
+df_roc <- ROC_graph(pred_class_rf_fit, 'cut', '.pred_High', 'Random Forest', df_roc)
+```
+
+
+### Best Cutoff 
+
+```{r}
+class_rf_cutoff <- ROC_threshold(pred_class_rf_fit, 'cut', '.pred_High')
+
+class_rf_cutoff %>% kable(digits=3)
+```
+
+
+### Results with Best Cutoff
+
+```{r}
+# Get .pred_cutoff columns
+pred_class_rf_fit <- pred_class_rf_fit %>% 
+  mutate(.pred_cutoff = factor(ifelse(.pred_High >= class_rf_cutoff[[1]], "High", "Acceptable"),
+         levels=c("High", "Acceptable")))
+
+# Get metrics
+class_rf_cutoff_metrics <- pred_class_rf_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_cutoff)
+
+# Get tibble for metrics
+class_rf_cutoff_results <- tibble(Model = 'Classification Random Forest with Cutoff',
+                    Accuracy = class_rf_cutoff_metrics[[1,3]],
+                    Sensitivity = class_rf_cutoff_metrics[[2,3]],
+                    Specificity = class_rf_cutoff_metrics[[3,3]],
+                    Precision = class_rf_cutoff_metrics[[4,3]],
+                    AUC = round(class_rf_auc, 3))
+
+# Merge all classification results together
+log_results <- bind_rows(log_results, class_rf_cutoff_results)
+
+# See the results
+log_results %>% kable(digits=3)
+```
+
+
+# Cut Prediction: Tuned Gradient Boosted (XGBoost)
+## Row
+### Column
+::: {.card title="Model Description"}
+
+* For this part of the analysis, we perform a Tuned Gradient Boosted (XGBoost) model to predict the cut of a diamond.
+* We use a grid of hyperparameters using a Latin hypercube sampling strategy, where `class_xg_grid` will contain a dataframe or tibble with 10 rows, where each row represents a unique combination of the specified hyperparameters.
+
+:::
+
+### Column
+::: {.card title="Setting up the model"}
+
+```{r}
+set.seed(64824)
+
+# Define the CV folds and grid parameter
+class_xg_folds <- vfold_cv(df_diamond_train, v=5)
+
+class_xg_grid <- grid_latin_hypercube(
+  loss_reduction(),
+  tree_depth(),
+  finalize(mtry(), df_diamond_train),
+  learn_rate(),
+  size = 10
+)
+
+# Define the model specification
+class_xg_spec <- boost_tree(trees = 500,
+                            min_n = 15,
+                            tree_depth = tune(),
+                            loss_reduction = tune(),
+                            mtry = tune(),
+                            learn_rate = tune()) %>% 
+  set_engine('xgboost') %>% 
+  set_mode('classification')
+
+# Define the workflow
+class_xg_wf <- workflow() %>% 
+  add_model(class_xg_spec) %>% 
+  add_formula(cut ~ ., )
+
+# Resample
+class_xg_rs <- class_xg_wf %>% 
+  tune_grid(resample = class_xg_folds,
+            grid = class_xg_grid)
+
+# Finalize the workflow
+final_class_xg_wf <- class_xg_wf %>% 
+  finalize_workflow(select_best(class_xg_rs))
+
+final_class_xg_wf
+
+```
+
+```{r}
+set.seed(32249)
+# Fit the model
+class_xg_fit <- final_class_xg_wf %>% 
+  fit(df_diamond_train)
+
+# Augment the model
+pred_class_xg_fit <- class_xg_fit %>% 
+  augment(df_diamond_test)
+```
+
+
+:::
+
+### Column
+::: {.card title="Variable Importance Plot"}
+
+```{r}
+vip(class_xg_fit, 
+    aesthetics = list(fill = "#6e0000", col = "black"))
+```
+
+:::
+
+## Row {.tabset}
+
+### Results
+
+```{r}
+# Get the metrics
+class_xg_metrics <- pred_class_xg_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_class)
+
+class_xg_auc <- pred_class_xg_fit %>% 
+  roc_auc(truth = cut, .pred_High) %>% 
+  pull(.estimate)
+
+# Get the metrics into a table
+class_xg_result <- tibble(Model = 'Classification Gradient Boosted',
+                    Accuracy = class_xg_metrics[[1,3]],
+                    Sensitivity = class_xg_metrics[[2,3]],
+                    Specificity = class_xg_metrics[[3,3]],
+                    Precision = class_xg_metrics[[4,3]],
+                    AUC = round(class_xg_auc, 3))
+
+# Merge all classification results together
+log_results <- bind_rows(log_results, class_xg_result)
+
+# See the results
+log_results %>% kable(digits=3)
+```
+
+
+### ROC Curve
+
+```{r}
+df_roc <- ROC_graph(pred_class_xg_fit, 'cut', '.pred_High', 'Gradient Boosted Model', df_roc)
+```
+
+
+### Best Cutoff 
+
+```{r}
+class_xg_cutoff <- ROC_threshold(pred_class_xg_fit, 'cut', '.pred_High')
+
+class_xg_cutoff %>% kable(digits=3)
+```
+
+
+### Results with Best Cutoff
+
+```{r}
+# Get .pred_cutoff columns
+pred_class_xg_fit <- pred_class_xg_fit %>% 
+  mutate(.pred_cutoff = factor(ifelse(.pred_High >= class_xg_cutoff[[1]], "High", "Acceptable"),
+         levels=c("High", "Acceptable")))
+
+# Get metrics
+class_xg_cutoff_metrics <- pred_class_xg_fit %>% 
+  my_class_metrics(truth = cut, estimate = .pred_cutoff)
+
+# Get tibble for metrics
+class_xg_cutoff_results <- tibble(Model = 'Classification Gradient Boosted with Cutoff',
+                    Accuracy = class_xg_cutoff_metrics[[1,3]],
+                    Sensitivity = class_xg_cutoff_metrics[[2,3]],
+                    Specificity = class_xg_cutoff_metrics[[3,3]],
+                    Precision = class_xg_cutoff_metrics[[4,3]],
+                    AUC = round(class_xg_auc, 3))
+
+# Merge all classification results together
+log_results <- bind_rows(log_results, class_xg_cutoff_results)
+
+# See the results
+log_results %>% kable(digits=3)
+```
+
+
+# Conclusion
+## Row
+
+### Column {width=50%}
+
+::: {.card title="Numerical Variable"}
+To predict `price`, here are the most important variables:
+
+* Width
+* Carat
+* Clarity
+* Length
+* Color
+
+For the price, how big, bright, and clear the diamond have a big impact!
+
+:::
+
+### Column {width=50%}
+
+::: {.card title="Categorical Variable"}
+To predict `cut`, here are the most important variables:
+
+* Length
+* Width
+* Depth
+* Depth_Perc
+* Table_Perc
+
+We can see that the different measurements of the diamond affect the cut of the diamond.
+
+:::
+
+## Row
+### Column {width=40%}
+::: {.card title="Regression Result Table"}
+* We can see that compared to Linear Regression models, the Bagged Model and Random Forest Model both perform better. While they have the same R-square, our Tuned Random Forest model has a slightly lower MAE and RMSE. Therefore, I would recommend the Tuned Random Forest model for this analysis. 
+
+```{r}
+reg_results %>% kable(digits=2)
+```
+
+:::
+
+### Column {width=60%}
+::: {.card title="Actual vs Predicted Plot"}
+
+```{r}
+stacked_pred <- bind_rows(pred_reg_fit %>% 
+                            mutate(model = "Linear"),
+                          pred_reg_bag_fit %>% 
+                            mutate(model="Tuned Bagged Model"),
+                          pred_reg_rf_fit %>% 
+                            mutate(model="Tuned Random Forest")
+)
+
+stacked_pred %>% 
+  ggplot(aes(y = .pred, x = price)) + 
+      geom_point(col = "#6e0000") +
+      geom_abline(col="gold") + 
+      ggtitle("Predicted vs Actual Diamond Price") +
+      facet_wrap(~model, scales = 'free')
+
+```
+
+:::
+
+## Row
+### Column {width=40%}
+::: {.card title="Classification Result Table"}
+* For `cut` prediction, I would recommend using Gradient Boosted model due to the high number of sensitivity, precision, and AUC. The model was able to catch 86% - 97% of the true positive values, and out of the positive values it predicted, 83% - 88% were true (depending on whether you use a best cutoff or not). 
+
+```{r}
+log_results %>% kable(digits=2)
+```
+
+:::
+
+### Column {width=60%}
+::: {.card title="ROC Curve Plot"}
+
+```{r}
+df_roc <- ROC_graph(pred_class_xg_fit, 'cut', '.pred_High', 'Gradient Boosted Model', df_roc)
+```
+
+
+:::
+
+## Row
+# Reflection
+## Row
+### Column {width=50%}
+
+::: {.card title="What did you work hardest on or are you most proud of in this project?"}
+
+* My biggest challenge in this project is that re-categorizing my categorical variables. I have a lot of categories in columns `clarity`, `color`, and `cut` and it was difficult to determine how to re-categorize them so that I only have about 2 to 3 categories in each column.
+* Trying to determine the tuning parameters of my Random Forest and XGBoost models also posed a problem, because there are so many parameters to try out.
+* What I'm most proud of in this project is that even though I ran into speed issue when I tried to run my tuned models, I still came up with some results that was significant in predicting my target variables.
+
+:::
+
+### Column {width=50%}
+
+::: {.card title="If I had another week to work on this project"}
+If I had another week to work on this project, I would love to try out more models we have done in class, such as Lasso and SVC. I would also try to normalize and balance the data set like what we did in homework case #2 and #3, to see if transforming the data set has any impacts on the performance of the models.
+:::
